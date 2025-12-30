@@ -123,20 +123,25 @@ def call(Map config = [:]) {
 
         post {
             success {
-                script {
-                    def buildJob =
-                        config.buildJob ?: "Build/${env.GITHUB_ORG}/${env.GITHUB_REPO}"
+		script {
 
-                    echo "🚀 Triggering downstream build: ${buildJob}"
+	            def buildJob = config.buildJob ?:
+        	        org.kb.utils.GitUtils.resolveBuildJob(
+                	    env.GITHUB_ORG,
+	                    env.GITHUB_REPO,
+	                    this
+        	        )
 
-                    build job: buildJob,
-                        wait: false,
-                        parameters: [
-                            string(name: 'github_release_branch', value: CHANGE_TARGET),
-                            string(name: 'jira_key', value: env.JIRA_ID ?: ""),
-                            string(name: 'pr_number', value: CHANGE_ID)
-                        ]
-                }
+	            echo "🚀 Triggering downstream build job → ${buildJob}"
+
+	            build job: buildJob,
+        	        wait: false,
+	                parameters: [
+        	            string(name: 'github_release_branch', value: env.CHANGE_TARGET),
+	                    string(name: 'jira_key', value: env.JIRA_ID ?: ""),
+	                    string(name: 'pr_number', value: env.CHANGE_ID)
+        	        ]
+		}
             }
 
             failure {

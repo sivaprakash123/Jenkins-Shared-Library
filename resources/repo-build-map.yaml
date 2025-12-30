@@ -1,0 +1,8 @@
+# repo-build-map.yaml
+# format: <org>/<repo>: <jenkins-job-path>
+
+KB-iGOT/sunbird-nodebb: Build/Core/Nodebb
+KB-iGOT/sunbird-portal: Build/Core/Portal
+KB-iGOT/sunbird-api: Build/API/Sunbird
+KB-iGOT/legacy-ui: Build/Legacy/UI
+

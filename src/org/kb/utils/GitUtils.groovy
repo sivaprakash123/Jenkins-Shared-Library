@@ -1,52 +1,29 @@
 package org.kb.utils
 
-import groovy.json.JsonSlurper
+import org.yaml.snakeyaml.Yaml
 
-class GitUtils {
+class GitUtils implements Serializable {
 
-    static def getPullRequestData(script, repo, prId) {
-        script.withCredentials([script.string(
-            credentialsId: 'gerrit-github-token',
-            variable: 'GITHUB_TOKEN'
-        )]) {
-            def out = script.sh(
-                script: """
-                    curl -s \
-                      -H "Authorization: Bearer $GITHUB_TOKEN" \
-                      https://api.github.com/repos/${repo}/pulls/${prId}
-                """,
-                returnStdout: true
-            )
-            return new JsonSlurper().parseText(out)
-        }
-    }
+    static String resolveBuildJob(String org, String repo, def steps) {
 
-    static def detectProjectType(script) {
-        if (script.fileExists("pom.xml")) return "java"
-        if (script.fileExists("package.json")) return "node"
-        return "unknown"
-    }
+        def fullRepo = "${org}/${repo}"
+        def defaultJob = "Build/${org}/${repo}"
 
-    static def mergePullRequest(script, repo, prId) {
-        script.withCredentials([script.string(
-            credentialsId: 'gerrit-github-token',
-            variable: 'GITHUB_TOKEN'
-        )]) {
-            def code = script.sh(
-                script: """
-                    curl -s -o /dev/null -w "%{http_code}" \
-                      -X PUT \
-                      -H "Authorization: Bearer $GITHUB_TOKEN" \
-                      -d '{"merge_method":"squash"}' \
-                      https://api.github.com/repos/${repo}/pulls/${prId}/merge
-                """,
-                returnStdout: true
-            ).trim()
+        try {
+            def yamlText = steps.libraryResource('repo-build-map.yaml')
+            def yaml = new Yaml().load(yamlText)
 
-            if (code != "200") {
-                script.error("GitHub merge failed (HTTP ${code})")
+            if (yaml?.containsKey(fullRepo)) {
+                steps.echo "🔁 Using mapped build job for ${fullRepo}"
+                return yaml[fullRepo]
             }
+
+        } catch (Exception e) {
+            steps.echo "⚠️ Repo-job mapping not found or failed to load, using default"
         }
+
+        steps.echo "ℹ️ Using default build job: ${defaultJob}"
+        return defaultJob
     }
 }
 
