@@ -4,16 +4,9 @@ def call(Map config = [:]) {
         agent any
 
         environment {
-            // Auto-detect GitHub Org and Repo Name
-            GIT_URL = sh(script: "git config --get remote.origin.url", returnStdout: true).trim()
-            GITHUB_REPO = sh(script: "basename -s .git ${env.GIT_URL}", returnStdout: true).trim()
-            GITHUB_ORG  = sh(script: "basename `dirname ${env.GIT_URL}`", returnStdout: true).trim()
-
-            GITHUB_FULL = "${GITHUB_ORG}/${GITHUB_REPO}"
-            GITHUB_API  = "https://api.github.com/repos/${GITHUB_FULL}"
-
-            SONARQUBE_ENV      = "sonarqube"
+            SONARQUBE_ENV = "sonarqube"
             SONAR_SCANNER_HOME = "/var/lib/jenkins/sonar-scanner"
+            JIRA_BASE_URL = "https://karmayogibharat.atlassian.net"
         }
 
         stages {
@@ -21,8 +14,18 @@ def call(Map config = [:]) {
             stage("Detect Pull Request") {
                 when { changeRequest() }
                 steps {
-                    echo "🔍 PR Detected: #${CHANGE_ID} (${CHANGE_BRANCH} → ${CHANGE_TARGET})"
-                    echo "📦 Repository: ${env.GITHUB_FULL}"
+                    script {
+                        env.GIT_URL = sh(
+                            script: "git config --get remote.origin.url",
+                            returnStdout: true
+                        ).trim()
+
+                        env.GITHUB_REPO = env.GIT_URL.tokenize('/').last().replace('.git','')
+                        env.GITHUB_ORG  = env.GIT_URL.tokenize('/')[-2]
+                        env.GITHUB_FULL = "${env.GITHUB_ORG}/${env.GITHUB_REPO}"
+
+                        echo "🔍 PR #${CHANGE_ID} detected for ${env.GITHUB_FULL}"
+                    }
                 }
             }
 
@@ -37,7 +40,9 @@ def call(Map config = [:]) {
                 when { changeRequest() }
                 steps {
                     script {
-                        def pr = org.kb.utils.GitUtils.getPullRequestData(env.GITHUB_API, CHANGE_ID)
+                        def pr = org.kb.utils.GitUtils.fetchPullRequest(
+                            env.GITHUB_FULL, CHANGE_ID
+                        )
                         env.PR_TITLE = pr.title
                         env.PR_BODY  = pr.body
                     }
@@ -48,7 +53,7 @@ def call(Map config = [:]) {
                 steps {
                     script {
                         env.PROJECT_TYPE = org.kb.utils.GitUtils.detectProjectType()
-                        echo "📦 Detected Project Type: ${env.PROJECT_TYPE}"
+                        echo "📦 Project Type: ${env.PROJECT_TYPE}"
                     }
                 }
             }
@@ -57,7 +62,10 @@ def call(Map config = [:]) {
                 when { changeRequest() }
                 steps {
                     script {
-                        org.kb.utils.SonarUtils.scan(env.PROJECT_TYPE, env.GITHUB_FULL)
+                        org.kb.utils.SonarUtils.runScan(
+                            env.PROJECT_TYPE,
+                            env.GITHUB_FULL
+                        )
                     }
                 }
             }
@@ -65,7 +73,7 @@ def call(Map config = [:]) {
             stage("Quality Gate") {
                 when { changeRequest() }
                 steps {
-                    timeout(time: 5, unit: 'MINUTES') {
+                    timeout(time: 10, unit: 'MINUTES') {
                         waitForQualityGate abortPipeline: true
                     }
                 }
@@ -75,7 +83,9 @@ def call(Map config = [:]) {
                 when { changeRequest() }
                 steps {
                     script {
-                        org.kb.utils.GitUtils.mergePullRequest(env.GITHUB_API, CHANGE_ID)
+                        org.kb.utils.GitUtils.mergePullRequest(
+                            env.GITHUB_FULL, CHANGE_ID
+                        )
                         env.PR_MERGE_STATUS = "SUCCESS"
                     }
                 }
@@ -84,8 +94,12 @@ def call(Map config = [:]) {
             stage("Detect Jira ID") {
                 steps {
                     script {
-                        env.JIRA_ID = org.kb.utils.JiraUtils.extractJiraId(env.PR_TITLE, env.PR_BODY)
-                        echo env.JIRA_ID ? "📌 Jira ID: ${env.JIRA_ID}" : "ℹ No Jira ID found"
+                        env.JIRA_ID = org.kb.utils.JiraUtils.extractJiraId(
+                            env.PR_TITLE, env.PR_BODY
+                        )
+                        echo env.JIRA_ID ?
+                            "🧩 Jira ID: ${env.JIRA_ID}" :
+                            "ℹ No Jira ID found"
                     }
                 }
             }
@@ -99,7 +113,9 @@ def call(Map config = [:]) {
                 }
                 steps {
                     script {
-                        org.kb.utils.JiraUtils.updateJiraStatus(env.JIRA_ID, "91")
+                        org.kb.utils.JiraUtils.transitionIssue(
+                            env.JIRA_ID, "91"
+                        )
                     }
                 }
             }
@@ -108,34 +124,35 @@ def call(Map config = [:]) {
         post {
             success {
                 script {
-                    def buildJob = config.buildJob ?: "Build/${env.GITHUB_ORG}/${env.GITHUB_REPO}"
+                    def buildJob =
+                        config.buildJob ?: "Build/${env.GITHUB_ORG}/${env.GITHUB_REPO}"
 
-                    echo "🚀 Triggering service build → ${buildJob}"
+                    echo "🚀 Triggering downstream build: ${buildJob}"
 
                     build job: buildJob,
                         wait: false,
                         parameters: [
-                            string(name: 'github_release_branch', value: env.CHANGE_TARGET),
+                            string(name: 'github_release_branch', value: CHANGE_TARGET),
                             string(name: 'jira_key', value: env.JIRA_ID ?: ""),
-                            string(name: 'pr_number', value: env.CHANGE_ID)
+                            string(name: 'pr_number', value: CHANGE_ID)
                         ]
                 }
             }
 
             failure {
                 script {
-                    org.kb.utils.NotificationUtils.sendTeamsFailure(
+                    org.kb.utils.NotificationUtils.notifyFailure(
                         env.GITHUB_FULL,
                         CHANGE_ID,
-                        env.CHANGE_BRANCH,
-                        env.CHANGE_TARGET,
+                        CHANGE_BRANCH,
+                        CHANGE_TARGET,
                         env.JIRA_ID
                     )
                 }
             }
 
             always {
-                echo "🏁 Completed"
+                echo "🏁 Pipeline completed"
             }
         }
     }
