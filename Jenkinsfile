@@ -1,3 +1,3 @@
-@Library('central-pipeline-lib@v1') _
+@Library('central-pipeline-lib@main') _
 prMergePipeline()
 
